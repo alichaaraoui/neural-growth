@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neural Growth</title>
+<link rel="icon" href="data:,">
+<script>try { if (localStorage.getItem('v6theme') === 'light') document.documentElement.dataset.theme = 'light'; } catch {}</script>
+<style>
+  /* Monochrome interface: the growing pattern is the only colour on screen. */
+  :root {
+    --bg: #0a0a0b; --panel: #131315; --field: #1a1a1d; --line: #232326; --line2: #2e2e32;
+    --ink: #ededee; --mute: #8d8d93; --faint: #57575d; --onink: #0a0a0b;
+    --dot: rgba(255, 255, 255, .11); --hover: rgba(255, 255, 255, .05); --shadow: none; --plate: #0f0f11;
+    --sans: "Avenir Next", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: Menlo, "SF Mono", ui-monospace, monospace;
+  }
+  html[data-theme="light"] {
+    --bg: #f3f2f0; --panel: #fcfbfa; --field: #f3f2f0; --line: #e7e4e1; --line2: #d9d6d2;
+    --ink: #1b1a1d; --mute: #77747a; --faint: #a6a2a8; --onink: #fcfbfa;
+    --plate: #fbfaf9; --dot: rgba(27, 26, 29, .13); --hover: rgba(27, 26, 29, .05); --shadow: 0 10px 34px rgba(30, 20, 30, .06), 0 1px 2px rgba(30, 20, 30, .04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  body { background-image: radial-gradient(circle, var(--dot) 1px, transparent 1.2px); background-size: 22px 22px; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  button:disabled { opacity: .3; cursor: default; }
+  :focus-visible { outline: 1.5px solid var(--ink); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  .mono { font: 500 10.5px var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); }
+
+  /* ---------- canvas ---------- */
+  #stage { position: fixed; inset: 0 0 0 400px; display: flex; align-items: center; justify-content: center; gap: 48px; padding: 120px 48px 128px; }
+  body.nopanel #stage { left: 0; }
+  .plate { position: relative; aspect-ratio: 1; width: min(100%, calc(100vh - 248px)); }
+  body.compare .plate { width: min(calc(50% - 24px), calc(100vh - 248px)); }
+  .plate canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  /* the canvas is a defined surface: plain inside, dotted grid only around it; its border is where growth stops */
+  .plate { background: var(--plate); border-radius: 16px; box-shadow: var(--shadow); }
+  .plate canvas { border-radius: 16px; }
+  .plate .edge { position: absolute; inset: 0; border-radius: 16px; border: 1px solid var(--line2); pointer-events: none; transition: border-color .6s, box-shadow .6s; }
+  .plate.near .edge { border-color: var(--faint); }
+  .plate.hit .edge { border-color: var(--mute); animation: hit 1.2s ease-out; }
+  @keyframes hit { 0% { box-shadow: 0 0 0 0 var(--line2); } 30% { box-shadow: 0 0 0 7px var(--hover); } 100% { box-shadow: 0 0 0 14px transparent; } }
+  .cap { position: absolute; top: -24px; left: 0; display: none; }
+  body.compare .cap { display: block; }
+  #simPlate { display: none; }
+  body.compare #simPlate { display: block; }
+  #input { cursor: crosshair; touch-action: none; }
+  body.drawing #input { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'%3E%3Ccircle cx='8' cy='8' r='3' fill='%23888'/%3E%3C/svg%3E") 8 8, crosshair; }
+  #hint { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; pointer-events: none; transition: opacity .3s; }
+  #hint b { font-size: 16px; font-weight: 500; }
+  #hint span { font-size: 13px; color: var(--mute); }
+
+  /* ---------- panel ---------- */
+  #panel { position: fixed; top: 24px; left: 24px; bottom: 24px; width: 352px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px;
+           box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; z-index: 3; transition: transform .3s, opacity .3s; }
+  body.nopanel #panel { transform: translateX(-20px); opacity: 0; pointer-events: none; }
+  #head { padding: 26px 26px 0; }
+  #head h1 { margin: 0; font-size: 22px; line-height: 1.12; font-weight: 600; letter-spacing: -.01em; }
+  #head h1 span { color: var(--mute); font-weight: 400; }
+  #head p { margin: 8px 0 0; font-size: 12.5px; color: var(--faint); }
+  .tabs { display: flex; gap: 22px; padding: 0 26px; margin-top: 20px; border-bottom: 1px solid var(--line); }
+  .tabs button { font-size: 13.5px; color: var(--faint); padding-bottom: 11px; margin-bottom: -1px; border-bottom: 1.5px solid transparent; }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button.on { color: var(--ink); border-color: var(--ink); }
+  .body { flex: 1; overflow-y: auto; padding: 22px 26px 26px; scrollbar-width: none; }
+  .body::-webkit-scrollbar { display: none; }
+
+  .sec + .sec { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--line); }
+  .sec-h { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+  .sec-h .note { font-size: 12.5px; color: var(--ink); }
+  .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; gap: 2px; border-radius: 10px; background: var(--field); border: 1px solid var(--line); }
+  .seg button { height: 30px; border-radius: 7px; font-size: 13px; color: var(--mute); transition: background .15s, color .15s; }
+  .seg button:hover { color: var(--ink); }
+  .seg button.on { background: var(--ink); color: var(--onink); font-weight: 500; }
+  .pane { margin-top: 14px; font-size: 13px; line-height: 1.55; color: var(--mute); }
+  .pane .line { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+  .link { font-size: 13px; color: var(--ink); text-decoration: underline; text-decoration-color: var(--faint); text-underline-offset: 3px; }
+
+  #shapeGrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+  #shapeGrid button { aspect-ratio: 1; border-radius: 10px; background: var(--field); border: 1px solid var(--line); padding: 8px; color: var(--mute); transition: border-color .15s, color .15s, background .15s; }
+  #shapeGrid button:hover { border-color: var(--faint); color: var(--ink); }
+  #shapeGrid button.on { background: var(--ink); border-color: var(--ink); color: var(--onink); }
+  #shapeGrid svg { width: 100%; height: 100%; display: block; }
+
+  .slider { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 14px; align-items: center; color: var(--ink); font-size: 13.5px; }
+  .slider:first-child { margin-top: 0; }
+  .slider output { font: 12px var(--mono); color: var(--mute); }
+  .slider input { grid-column: 1 / 3; width: 100%; margin: 0; -webkit-appearance: none; appearance: none; height: 16px; background: transparent; }
+  .slider input::-webkit-slider-runnable-track { height: 2px; border-radius: 1px; background: var(--line2); }
+  .slider input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--ink); margin-top: -6px; box-shadow: 0 0 0 4px var(--panel); }
+  .slider input::-moz-range-track { height: 2px; background: var(--line2); }
+  .slider input::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--ink); }
+  .btn { width: 100%; height: 36px; margin-top: 16px; border-radius: 9px; border: 1px solid var(--line2); font-size: 13px; transition: border-color .15s, background .15s; }
+  .btn:hover:not(:disabled) { border-color: var(--faint); background: var(--hover); }
+
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 13.5px; }
+  .row + .row { margin-top: 16px; }
+  .row small { display: block; font-size: 12px; color: var(--faint); margin-top: 2px; }
+  .row .seg { width: 150px; flex: none; }
+  .switch { width: 34px; height: 20px; border-radius: 10px; background: var(--line2); position: relative; flex: none; cursor: pointer; transition: background .2s; }
+  .switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--mute); transition: transform .2s, background .2s; }
+  .switch.on { background: var(--ink); }
+  .switch.on::after { transform: translateX(14px); background: var(--onink); }
+
+  #aboutTab p { font-size: 13.5px; line-height: 1.65; color: var(--mute); margin: 0 0 14px; }
+  #aboutTab b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- readout (top right) ---------- */
+  #readout { position: fixed; top: 30px; right: 36px; width: 360px; z-index: 2; }
+  #stats { display: grid; grid-template-columns: repeat(4, 1fr); column-gap: 18px; text-align: right; }
+  #stats div { display: flex; flex-direction: column; gap: 6px; }
+  #stats b { font: 400 18px var(--mono); }
+  #key { margin-top: 18px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; }
+  #key i { height: 6px; border-radius: 3px; background: linear-gradient(90deg, #2c115f, #721f81, #b73779, #f1605d, #feb078, #fcfdbf); }
+  html[data-theme="light"] #key i { background: linear-gradient(90deg, #1c1044, #4f127b, #812581, #b5367a, #e55064, #fb8761, #fdb27c); }
+
+  /* ---------- toolbar ---------- */
+  #bar { position: fixed; bottom: 26px; left: calc(50% + 200px); transform: translateX(-50%); display: flex; align-items: center; gap: 2px;
+         background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px; box-shadow: var(--shadow); z-index: 3; transition: left .3s; }
+  body.nopanel #bar, body.nopanel #status { left: 50%; }
+  #bar button { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; color: var(--mute); transition: background .15s, color .15s; }
+  #bar button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+  #bar button.on { background: var(--hover); color: var(--ink); }
+  #bar button svg { width: 18px; height: 18px; }
+  #bar #grow { width: auto; min-width: 118px; padding: 0 20px 0 16px; border-radius: 999px; display: flex; gap: 8px; justify-content: center; background: var(--ink); color: var(--onink); font-size: 14px; font-weight: 500; margin-right: 6px; }
+  #bar #grow:hover:not(:disabled) { background: var(--ink); color: var(--onink); opacity: .88; }
+  #bar #grow svg { width: 15px; height: 15px; }
+  #bar #grow.ready { animation: ready 1.8s ease-in-out infinite; }
+  @keyframes ready { 50% { box-shadow: 0 0 0 6px var(--hover); } }
+  #bar .sep { width: 1px; height: 20px; background: var(--line2); margin: 0 5px; }
+  #status { position: fixed; bottom: 90px; left: calc(50% + 200px); transform: translateX(-50%); font-size: 13px; color: var(--mute); white-space: nowrap; transition: left .3s; }
+
+  @media (max-width: 1000px) {
+    html, body { overflow: auto; }
+    #panel { position: relative; inset: auto; margin: 16px; width: auto; }
+    body.nopanel #panel { display: none; }
+    #stage { position: relative; inset: auto; padding: 150px 16px 150px; min-height: 100vw; flex-direction: column; }
+    .plate, body.compare .plate { width: 100%; }
+    #readout { position: absolute; right: 20px; left: 20px; width: auto; }
+    #bar, #status { left: 50%; }
+  }
+</style>
+</head>
+<body>
+
+<main id="stage">
+  <div class="plate" id="modelPlate">
+    <span class="cap mono">neural network</span>
+    <canvas id="model" width="1152" height="1152"></canvas>
+    <canvas id="input" width="1024" height="1024"></canvas>
+    <div class="edge"></div>
+    <div id="hint"><b id="hintText">choose a start shape</b><span id="hintSub">or click here to place points</span></div>
+  </div>
+  <div class="plate" id="simPlate">
+    <span class="cap mono">simulator · real rules</span>
+    <canvas id="sim" width="1152" height="1152"></canvas>
+    <div class="edge"></div>
+  </div>
+</main>
+
+<aside id="panel">
+  <div id="head">
+    <h1>neural<br><span>growth</span></h1>
+    <p>Ali Chaaraoui &amp; Jay Anupoju</p>
+  </div>
+  <nav class="tabs"><button data-tab="controls" class="on">controls</button><button data-tab="about">about</button></nav>
+
+  <div class="body" id="controlsTab">
+    <section class="sec">
+      <div class="sec-h"><span class="mono">start</span><span class="note" id="startNote"></span></div>
+      <div class="seg" id="modeSeg">
+        <button data-mode="shape" class="on">shape</button>
+        <button data-mode="points">points</button>
+        <button data-mode="draw">draw</button>
+        <button data-mode="random">random</button>
+      </div>
+      <div class="pane" data-pane="shape"><div id="shapeGrid"></div></div>
+      <div class="pane" data-pane="points" hidden>Click on the canvas to place three or more points. They join into a shape in angle order.
+        <div class="line"><span class="mono" id="ptCount">0 points</span><button class="link" id="clearPts">clear</button></div></div>
+      <div class="pane" data-pane="draw" hidden>Draw a closed outline on the canvas. It starts growing when you let go.</div>
+      <div class="pane" data-pane="random" hidden>
+        <label class="slider"><span>points</span><output id="nOut">any</output><input id="nPts" type="range" min="2" max="40" value="2"></label>
+        <label class="slider"><span>spread</span><output id="spreadOut">14</output><input id="spread" type="range" min="4" max="24" value="14"></label>
+        <button class="btn" id="random" disabled>new random points</button>
+      </div>
+    </section>
+
+    <section class="sec" id="charSec" hidden>
+      <div class="sec-h"><span class="mono">character</span><button class="link" id="surprise">surprise me</button></div>
+      <label class="slider"><span>fold size</span><output id="foldOut">2.00</output><input id="foldSize" type="range" min="0" max="1000"></label>
+      <label class="slider"><span>wildness</span><output id="wildOut">0.15</output><input id="wildness" type="range" min="0" max="1000"></label>
+    </section>
+
+    <section class="sec">
+      <div class="sec-h"><span class="mono">view</span></div>
+      <div class="row"><span>colour</span>
+        <div class="seg" id="viewSeg"><button data-view="fill" class="on">by age</button><button data-view="line">outline</button></div></div>
+      <div class="row"><span>compare with simulator<small>the real rules, same start, side by side</small></span>
+        <span class="switch" id="compareSwitch" role="switch" aria-checked="false" tabindex="0" aria-label="compare with simulator"></span></div>
+      <div class="row"><span>raw network output<small>off: each step is cleaned into one closed line</small></span>
+        <span class="switch" id="rawSwitch" role="switch" aria-checked="false" tabindex="0" aria-label="raw network output"></span></div>
+      <label class="slider" style="margin-top:18px"><span>speed</span><output id="speedOut">1x</output><input id="speed" type="range" min="0" max="4" value="1" step="1"></label>
+    </section>
+  </div>
+
+  <div class="body" id="aboutTab" hidden>
+    <p>A neural network that learned <b>differential growth</b>. It never sees the growth rules. From 1,000 simulated runs it
+      learned one thing: how a shape looks <span id="itersWord">16</span> iterations later, given the shape now and one step ago.</p>
+    <p>Repeating that one step grows the pattern, from any start you give it. Colour shows age: the oldest growth is dark, the newest is bright.</p>
+    <p>Compare runs the real simulator beside it from the same start, so you can see how close the network gets.</p>
+    <p>Model <b id="modelLabel">V6</b>, running entirely in this browser.</p>
+    <p>Ali Chaaraoui &amp; Jay Anupoju<br>advisor Dr. Bushra Ferdousi<br>UR2PhD · UNC Charlotte</p>
+  </div>
+</aside>
+
+<div id="readout">
+  <div id="stats">
+    <div><span class="mono">step</span><b id="stepNum">0</b></div>
+    <div><span class="mono">iteration</span><b id="iters">0</b></div>
+    <div><span class="mono">ms/step</span><b id="ms">–</b></div>
+    <div><span class="mono">reach</span><b id="reach">0%</b></div>
+  </div>
+  <div id="key"><span class="mono">older</span><i></i><span class="mono">newer</span></div>
+</div>
+
+<div id="status"></div>
+<div id="bar">
+  <button id="grow" title="grow / pause (space)" disabled></button>
+  <button id="stepBtn" title="one step" aria-label="one step"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6.5v11l8.5-5.5z"/><rect x="16" y="6.5" width="2.2" height="11" rx="1"/></svg></button>
+  <button id="reset" title="reset (esc)" aria-label="reset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12a7 7 0 1 0 2.1-5"/><path d="M5 4v4h4"/></svg></button>
+  <span class="sep"></span>
+  <button id="compareTool" title="compare with the simulator" aria-label="compare"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="6" width="7.5" height="12" rx="1.5"/><rect x="13" y="6" width="7.5" height="12" rx="1.5"/></svg></button>
+  <button id="saveTool" title="save image" aria-label="save image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 19h14"/></svg></button>
+  <button id="themeTool" title="light / dark" aria-label="light or dark theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="7.5"/><path d="M12 4.5a7.5 7.5 0 0 1 0 15z" fill="currentColor"/></svg></button>
+  <button id="panelTool" title="show / hide panel" aria-label="panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M9.5 5v14"/></svg></button>
+</div>
+
+<script src="vendor/ort/ort.webgpu.min.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
