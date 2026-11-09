@@ -52,21 +52,33 @@ let msAvg = 0, stepOnce = false, ended = false;   // ended: growth reached the e
 
 // ---- the network ---------------------------------------------------------------------
 
-async function loadModel() {
-  ort.env.logLevel = 'error';
-  ort.env.wasm.wasmPaths = new URL('vendor/ort/', location.href).href;
-  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(8, navigator.hardwareConcurrency || 4) : 1;
-  for (const ep of ['webgpu', 'wasm']) {
-    if (ep === 'webgpu' && !navigator.gpu) continue;
-    try { session = await ort.InferenceSession.create(MODEL_URL, { executionProviders: [ep], logSeverityLevel: 3 }); break; }
-    catch (e) { console.warn(ep, e); }
-  }
-  try {
-    const meta = await (await fetch(META_URL, { cache: 'no-store' })).json();
+// The network runs in a worker (infer.js) so the page stays smooth while it thinks.
+// iPhone/iPad use WASM: Safari's WebGPU path is the one that crashed on phones.
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let worker = null, jobs = new Map(), jobId = 0;
+
+function loadModel() {
+  worker = new Worker('infer.js');
+  worker.onmessage = ({ data: m }) => {
+    if (m.type === 'progress') { if (!session) setStatus(`loading model… ${Math.round(m.p * 100)}%`); return; }
+    if (m.type === 'loaded') { onLoaded(m); return; }
+    const job = jobs.get(m.id); if (!job) return;
+    jobs.delete(m.id);
+    if (m.type === 'result') { lastModelMs = m.ms; job.resolve(m.next); }
+    else job.reject(new Error(m.msg));
+  };
+  worker.onerror = e => { for (const j of jobs.values()) j.reject(e); jobs.clear(); };
+  worker.postMessage({ type: 'load', url: MODEL_URL, base: new URL('.', location.href).href, eps: isIOS || !navigator.gpu ? ['wasm'] : ['webgpu', 'wasm'] });
+  fetch(META_URL, { cache: 'no-store' }).then(r => r.json()).then(meta => {
     if (meta.label) { $('modelLabel').textContent = meta.label.split(' ')[0]; $('modelLabel').title = meta.label; }
     if (meta.iters_per_step) ITERS_PER_STEP = meta.iters_per_step;
-  } catch {}
+    $('itersWord').textContent = ITERS_PER_STEP;
+  }).catch(() => {});
   $('itersWord').textContent = ITERS_PER_STEP;
+}
+
+function onLoaded(m) {
+  session = m.ok ? { inputNames: m.inputs, ep: m.ep } : null;
   hasParams = !!session && session.inputNames.includes('params');
   $('charSec').hidden = !hasParams;
   syncParams();
@@ -77,16 +89,11 @@ async function loadModel() {
 let queue = Promise.resolve();          // one network call at a time
 let lastModelMs = 0;                    // time of the last network call alone
 function modelStep(fill, prev) {
-  const job = queue.then(async () => {
-    const t0 = performance.now();
-    const feeds = { fill: new ort.Tensor('float32', fill, [1, 1, R, R]) };
-    if (session.inputNames.includes('prev')) feeds.prev = new ort.Tensor('float32', prev, [1, 1, R, R]);
-    if (hasParams) feeds.params = new ort.Tensor('float32', Float32Array.from(pv), [1, PARAMS.length]);
-    const lg = (await session.run(feeds))[session.outputNames[0]].data, next = new Float32Array(N);
-    for (let i = 0; i < N; i++) next[i] = lg[i] > 0 ? 1 : 0;
-    lastModelMs = performance.now() - t0;
-    return next;
-  });
+  const job = queue.then(() => new Promise((resolve, reject) => {
+    const id = ++jobId;
+    jobs.set(id, { resolve, reject });
+    worker.postMessage({ type: 'run', id, R, fill: fill.slice(), prev: prev.slice(), params: hasParams ? Float32Array.from(pv) : null });
+  }));
   queue = job.catch(() => {});
   return job;
 }
@@ -339,7 +346,9 @@ async function run() {
   let pending = modelStep(M.fill, M.prev), msSum = 0, msN = 0;
 
   while (state === 'growing' && me === runId) {
-    const raw = await pending;
+    let raw;
+    try { raw = await pending; }
+    catch (e) { if (me === runId) { console.warn(e); stop('the network stopped, press grow to try again'); } return; }
     if (me !== runId || state !== 'growing') return;
     const next = rawOutput ? raw : oneLine(raw);   // one closed line unless the raw view is on
     msSum += lastModelMs; msN++; msAvg = msSum / msN;
