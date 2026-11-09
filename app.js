@@ -58,7 +58,7 @@ const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platfor
 let worker = null, jobs = new Map(), jobId = 0;
 
 function loadModel() {
-  worker = new Worker('infer.js');
+  worker = new Worker('infer.js?v=3');
   worker.onmessage = ({ data: m }) => {
     if (m.type === 'progress') { if (!session) setStatus(`loading model… ${Math.round(m.p * 100)}%`); return; }
     if (m.type === 'loaded') { onLoaded(m); return; }
